@@ -457,26 +457,38 @@ export default function DashboardScreen({ navigation }) {
       </View>
       
       <View style={[styles.listCardContainer, { backgroundColor: theme.card, borderColor: theme.border }]}>
-        {accountBalances.map((acc, index) => (
-          <View 
-            key={acc.id} 
-            style={[
-              styles.accountRow, 
-              { borderColor: theme.border },
-              index === accountBalances.length - 1 && { borderBottomWidth: 0 }
-            ]}
-          >
-            <View style={styles.accountInfoLeft}>
-              <View style={[styles.accountIconDummy, { backgroundColor: theme.background }]}>
-                <Text style={styles.accountIconText}>💳</Text>
-              </View>
-              <Text style={[styles.accName, { color: theme.textPrimary }]}>{acc.name}</Text>
-            </View>
-            <Text style={[styles.accValue, { color: theme.textPrimary }]}>
-              {showBalance ? `$${acc.balance.toFixed(2)}` : '$ •••'}
+        {accountBalances.length === 0 ? (
+          <View style={{ padding: normalize(16), alignItems: 'center' }}>
+            <Text style={{ color: theme.textSecondary, fontSize: normalize(12) }}>
+              No hay cuentas registradas. Agrega una desde Movimientos.
             </Text>
           </View>
-        ))}
+        ) : (
+          accountBalances.map((acc, index) => {
+            const lowerName = (acc.name || '').toLowerCase();
+            const iconEmoji = lowerName.includes('efectivo') ? '💵' : lowerName.includes('tarjeta') ? '💳' : lowerName.includes('banc') ? '🏦' : '🪙';
+            return (
+              <View 
+                key={acc.id} 
+                style={[
+                  styles.accountRow, 
+                  { borderColor: theme.border },
+                  index === accountBalances.length - 1 && { borderBottomWidth: 0 }
+                ]}
+              >
+                <View style={styles.accountInfoLeft}>
+                  <View style={[styles.accountIconDummy, { backgroundColor: theme.background }]}>
+                    <Text style={styles.accountIconText}>{iconEmoji}</Text>
+                  </View>
+                  <Text style={[styles.accName, { color: theme.textPrimary }]}>{acc.name}</Text>
+                </View>
+                <Text style={[styles.accValue, { color: theme.textPrimary }]}>
+                  {showBalance ? `$${acc.balance.toFixed(2)}` : '$ •••'}
+                </Text>
+              </View>
+            );
+          })
+        )}
       </View>
 
       {/* 📊 SECCIÓN: GRÁFICO DE DISTRIBUCIÓN */}

@@ -86,6 +86,45 @@ function timeStringToMinutes(timeStr) {
 
 const STORAGE_KEY = '@user_institutional_schedule';
 const STORAGE_CAREER = '@user_institutional_career';
+const STORAGE_ACTIVITIES = '@user_institutional_activities';
+
+const MONTH_NAMES = [
+  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+];
+
+const DAYS_SHORT = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+
+const DEFAULT_ACTIVITY_TYPES = [
+  { id: 'Examen', label: 'Examen / Parcial', icon: 'document-text', color: '#DC2626' },
+  { id: 'Tarea', label: 'Tarea / Guía', icon: 'book', color: '#2563EB' },
+  { id: 'Proyecto', label: 'Proyecto / Defensa', icon: 'code-slash', color: '#7C3AED' },
+  { id: 'Laboratorio', label: 'Laboratorio', icon: 'flask', color: '#059669' },
+  { id: 'Reunión', label: 'Reunión / Asesoría', icon: 'people', color: '#D97706' },
+  { id: 'General', label: 'Actividad General', icon: 'bookmark', color: '#0891B2' },
+];
+
+const ACTIVITY_TYPES = DEFAULT_ACTIVITY_TYPES;
+
+function formatDateYMD(d) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatDateReadable(dateStr) {
+  if (!dateStr) return '';
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+  const y = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10) - 1;
+  const d = parseInt(parts[2], 10);
+  const dateObj = new Date(y, m, d);
+  const dayName = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][dateObj.getDay()];
+  const monthName = MONTH_NAMES[m] || '';
+  return `${dayName}, ${d} de ${monthName} de ${y}`;
+}
 
 const DAYS_OF_WEEK = [
   { key: 'lunes', label: 'Lun', full: 'Lunes' },
@@ -196,10 +235,189 @@ export default function ScheduleScreen() {
   const [targetCopyDays, setTargetCopyDays] = useState([]);
 
   // Estado para alternar entre Vista Diaria y Lista de Materias (sin duplicados)
-  const [activeScheduleTab, setActiveScheduleTab] = useState('calendar'); // 'calendar' | 'subjects'
+  const [activeScheduleTab, setActiveScheduleTab] = useState('weekly'); // 'weekly' | 'subjects' | 'activities'
 
   // Estado para el reloj interactivo (selector de hora)
   const [timePickerTarget, setTimePickerTarget] = useState(null); // 'start' | 'end' | null
+
+  // ── ESTADOS PARA CALENDARIO DE ACTIVIDADES EN DÍAS ESPECÍFICOS (SEPARADO DE MATERIAS) ──
+  const [activitiesList, setActivitiesList] = useState([]);
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState(() => formatDateYMD(new Date()));
+  const [calendarMonthDate, setCalendarMonthDate] = useState(new Date());
+
+  const [activityModalVisible, setActivityModalVisible] = useState(false);
+  const [editingActivity, setEditingActivity] = useState(null);
+
+  // Form State para Actividad
+  const [actTitulo, setActTitulo] = useState('');
+  const [actTipo, setActTipo] = useState('Examen');
+  const [actFecha, setActFecha] = useState(() => formatDateYMD(new Date()));
+  const [actHora, setActHora] = useState('08:00 AM');
+  const [actMateria, setActMateria] = useState('');
+  const [actLugar, setActLugar] = useState('');
+  const [actNotas, setActNotas] = useState('');
+
+  const [actDatePickerVisible, setActDatePickerVisible] = useState(false);
+  const [actTimePickerVisible, setActTimePickerVisible] = useState(false);
+
+  const onActivityTimeChange = (event, selectedDate) => {
+    setActTimePickerVisible(false);
+    if (event.type === 'dismissed') return;
+    if (selectedDate) {
+      setActHora(formatTime12h(selectedDate));
+    }
+  };
+
+  const onActivityDateChange = (event, selectedDate) => {
+    setActDatePickerVisible(false);
+    if (event.type === 'dismissed') return;
+    if (selectedDate) {
+      setActFecha(formatDateYMD(selectedDate));
+    }
+  };
+
+  // ── TIPOS DE ACTIVIDAD PERSONALIZADOS (Permite agregar más tipos) ──
+  const STORAGE_CUSTOM_TYPES = '@user_custom_activity_types';
+  const userCustomTypesKey = user?.email ? `${STORAGE_CUSTOM_TYPES}_${user.email}` : STORAGE_CUSTOM_TYPES;
+
+  const [customActivityTypes, setCustomActivityTypes] = useState([]);
+  const [showAddTypeInput, setShowAddTypeInput] = useState(false);
+  const [newTypeNameInput, setNewTypeNameInput] = useState('');
+  const [newTypeColorSelected, setNewTypeColorSelected] = useState('#2563EB');
+
+  const allActivityTypes = useMemo(() => {
+    return [...DEFAULT_ACTIVITY_TYPES, ...customActivityTypes];
+  }, [customActivityTypes]);
+
+  const getActivityTypeMeta = (tipoId) => {
+    const clean = (tipoId || '').trim().toLowerCase();
+    const found = allActivityTypes.find(
+      (t) => (t.id || '').toLowerCase() === clean || (t.label || '').toLowerCase() === clean
+    );
+    if (found) return found;
+    return {
+      id: tipoId || 'General',
+      label: tipoId || 'General',
+      icon: 'bookmark',
+      color: '#0891B2',
+    };
+  };
+
+  // Sincronización y escucha de tipos personalizados
+  useEffect(() => {
+    if (!user || !user.email) {
+      setCustomActivityTypes([]);
+      return;
+    }
+
+    AsyncStorage.getItem(userCustomTypesKey).then((saved) => {
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) setCustomActivityTypes(parsed);
+        } catch (e) {
+          console.warn('Error leyendo tipos de actividad locales:', e);
+        }
+      }
+    });
+
+    const qTypes = query(collection(db, 'activity_types'), where('userId', '==', user.email));
+    const unsubscribe = onSnapshot(
+      qTypes,
+      async (snapshot) => {
+        const cloudTypes = snapshot.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...docSnap.data(),
+        }));
+        setCustomActivityTypes(cloudTypes);
+        try {
+          await AsyncStorage.setItem(userCustomTypesKey, JSON.stringify(cloudTypes));
+        } catch (e) {
+          console.warn('Error guardando tipos de actividad en caché:', e);
+        }
+      },
+      (error) => {
+        console.warn('Firestore offline para tipos de actividad:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user, userCustomTypesKey]);
+
+  const handleCreateCustomActivityType = async () => {
+    const cleanName = newTypeNameInput.trim();
+    if (!cleanName) {
+      Alert.alert('Campo Vacío', 'Ingresa el nombre del tipo de actividad.');
+      return;
+    }
+
+    const alreadyExists = allActivityTypes.some(
+      (t) => (t.id || '').toLowerCase() === cleanName.toLowerCase() ||
+             (t.label || '').toLowerCase() === cleanName.toLowerCase()
+    );
+    if (alreadyExists) {
+      Alert.alert('Ya Existe', `El tipo "${cleanName}" ya está registrado.`);
+      return;
+    }
+
+    const newTypeObj = {
+      id: cleanName,
+      name: cleanName,
+      label: cleanName,
+      icon: 'bookmark',
+      color: newTypeColorSelected || '#2563EB',
+      userId: user?.email || '',
+      createdAt: new Date().toISOString(),
+    };
+
+    const tempId = `temp_type_${Date.now()}`;
+    const localItem = { id: tempId, ...newTypeObj };
+    const updated = [...customActivityTypes, localItem];
+    setCustomActivityTypes(updated);
+    setActTipo(cleanName);
+    setNewTypeNameInput('');
+    setShowAddTypeInput(false);
+
+    try {
+      await AsyncStorage.setItem(userCustomTypesKey, JSON.stringify(updated));
+      const docRef = await addDoc(collection(db, 'activity_types'), newTypeObj);
+      setCustomActivityTypes((prev) =>
+        prev.map((t) => (t.id === tempId ? { ...t, id: docRef.id } : t))
+      );
+      Alert.alert('Tipo Creado', `Se agregó el tipo de actividad "${cleanName}".`);
+    } catch (e) {
+      console.warn('Error guardando tipo en la nube:', e);
+    }
+  };
+
+  const handleDeleteCustomActivityType = (typeItem) => {
+    Alert.alert(
+      'Eliminar Tipo de Actividad',
+      `¿Deseas eliminar el tipo "${typeItem.label || typeItem.name}"?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: async () => {
+            const updated = customActivityTypes.filter((t) => t.id !== typeItem.id);
+            setCustomActivityTypes(updated);
+            if (actTipo === typeItem.id || actTipo === typeItem.label) {
+              setActTipo('General');
+            }
+            try {
+              await AsyncStorage.setItem(userCustomTypesKey, JSON.stringify(updated));
+              if (typeItem.id && !typeItem.id.startsWith('temp_')) {
+                await deleteDoc(doc(db, 'activity_types', typeItem.id));
+              }
+            } catch (e) {
+              console.warn('Error eliminando tipo:', e);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   const onTimeChange = (event, selectedDate) => {
     const target = timePickerTarget;
@@ -292,6 +510,242 @@ export default function ScheduleScreen() {
 
     return () => unsubscribe();
   }, [user, userStorageKey]);
+
+  const userActivitiesKey = user?.email ? `${STORAGE_ACTIVITIES}_${user.email}` : STORAGE_ACTIVITIES;
+
+  // 3. SINCRONIZACIÓN Y CACHÉ LOCAL DE ACTIVIDADES (DÍAS ESPECÍFICOS)
+  useEffect(() => {
+    if (!user || !user.email) {
+      setActivitiesList([]);
+      return;
+    }
+
+    AsyncStorage.getItem(userActivitiesKey).then((saved) => {
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) setActivitiesList(parsed);
+        } catch (e) {
+          console.warn('Error leyendo actividades:', e);
+        }
+      }
+    });
+
+    const qAct = query(collection(db, 'activities'), where('userId', '==', user.email));
+    const unsubscribe = onSnapshot(
+      qAct,
+      async (snapshot) => {
+        const cloudItems = snapshot.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...docSnap.data(),
+        }));
+        cloudItems.sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''));
+        setActivitiesList(cloudItems);
+        try {
+          await AsyncStorage.setItem(userActivitiesKey, JSON.stringify(cloudItems));
+        } catch (e) {
+          console.warn('Error guardando actividades en caché:', e);
+        }
+      },
+      (error) => {
+        console.warn('Firestore offline para actividades:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user, userActivitiesKey]);
+
+  // Navegación de mes en Calendario
+  const calendarYear = calendarMonthDate.getFullYear();
+  const calendarMonth = calendarMonthDate.getMonth();
+
+  const handlePrevMonth = () => {
+    setCalendarMonthDate(new Date(calendarYear, calendarMonth - 1, 1));
+  };
+
+  const handleNextMonth = () => {
+    setCalendarMonthDate(new Date(calendarYear, calendarMonth + 1, 1));
+  };
+
+  const handleTodayMonth = () => {
+    const now = new Date();
+    setCalendarMonthDate(new Date(now.getFullYear(), now.getMonth(), 1));
+    setSelectedCalendarDate(formatDateYMD(now));
+  };
+
+  // Cuadrícula del mes interactivo
+  const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
+  const firstDayOfWeek = (new Date(calendarYear, calendarMonth, 1).getDay() + 6) % 7; // Lun=0 .. Dom=6
+  const prevMonthDays = new Date(calendarYear, calendarMonth, 0).getDate();
+
+  const calendarGrid = useMemo(() => {
+    const grid = [];
+    for (let i = firstDayOfWeek - 1; i >= 0; i--) {
+      grid.push({
+        dayNumber: prevMonthDays - i,
+        isCurrentMonth: false,
+        dateStr: null,
+      });
+    }
+    for (let day = 1; day <= daysInMonth; day++) {
+      const mStr = String(calendarMonth + 1).padStart(2, '0');
+      const dStr = String(day).padStart(2, '0');
+      const dateStr = `${calendarYear}-${mStr}-${dStr}`;
+      grid.push({
+        dayNumber: day,
+        isCurrentMonth: true,
+        dateStr,
+      });
+    }
+    const remaining = (7 - (grid.length % 7)) % 7;
+    for (let i = 1; i <= remaining; i++) {
+      grid.push({
+        dayNumber: i,
+        isCurrentMonth: false,
+        dateStr: null,
+      });
+    }
+    return grid;
+  }, [calendarYear, calendarMonth, daysInMonth, firstDayOfWeek, prevMonthDays]);
+
+  const activitiesByDate = useMemo(() => {
+    const map = {};
+    for (let i = 0; i < activitiesList.length; i++) {
+      const act = activitiesList[i];
+      if (!act.fecha) continue;
+      if (!map[act.fecha]) map[act.fecha] = [];
+      map[act.fecha].push(act);
+    }
+    return map;
+  }, [activitiesList]);
+
+  // Manejadores CRUD de Actividades (Separado de materias)
+  const handleOpenAddActivity = (dateStr) => {
+    setEditingActivity(null);
+    setActTitulo('');
+    setActTipo('Examen');
+    setActFecha(dateStr || selectedCalendarDate || formatDateYMD(new Date()));
+    setActHora('08:00 AM');
+    setActMateria(uniqueSubjects.length > 0 ? uniqueSubjects[0].materia : '');
+    setActLugar('');
+    setActNotas('');
+    setActivityModalVisible(true);
+  };
+
+  const handleOpenEditActivity = (activity) => {
+    setEditingActivity(activity);
+    setActTitulo(activity.titulo || '');
+    setActTipo(activity.tipo || 'Examen');
+    setActFecha(activity.fecha || selectedCalendarDate);
+    setActHora(activity.hora || '08:00 AM');
+    setActMateria(activity.materia || '');
+    setActLugar(activity.lugar || '');
+    setActNotas(activity.notas || '');
+    setActivityModalVisible(true);
+  };
+
+  const handleSaveActivity = async () => {
+    if (!actTitulo.trim()) {
+      Alert.alert('Campo Obligatorio', 'Ingresa el nombre o título de la actividad.');
+      return;
+    }
+    if (!actFecha) {
+      Alert.alert('Campo Obligatorio', 'Selecciona la fecha de la actividad.');
+      return;
+    }
+
+    const activityData = {
+      titulo: actTitulo.trim(),
+      tipo: actTipo,
+      fecha: actFecha,
+      hora: actHora,
+      materia: actMateria || '',
+      lugar: actLugar.trim(),
+      notas: actNotas.trim(),
+      completada: editingActivity ? !!editingActivity.completada : false,
+      userId: user?.email || '',
+      updatedAt: new Date().toISOString(),
+    };
+
+    setActivityModalVisible(false);
+
+    if (editingActivity) {
+      const updatedList = activitiesList.map((a) =>
+        a.id === editingActivity.id ? { ...a, ...activityData } : a
+      );
+      setActivitiesList(updatedList);
+      try {
+        await AsyncStorage.setItem(userActivitiesKey, JSON.stringify(updatedList));
+        if (editingActivity.id && !editingActivity.id.startsWith('temp_')) {
+          await updateDoc(doc(db, 'activities', editingActivity.id), activityData);
+        }
+      } catch (e) {
+        console.warn('Error actualizando actividad:', e);
+      }
+    } else {
+      const tempId = `temp_act_${Date.now()}`;
+      const newActivity = { id: tempId, ...activityData, createdAt: new Date().toISOString() };
+      const updatedList = [...activitiesList, newActivity];
+      setActivitiesList(updatedList);
+      try {
+        await AsyncStorage.setItem(userActivitiesKey, JSON.stringify(updatedList));
+        const docRef = await addDoc(collection(db, 'activities'), {
+          ...activityData,
+          createdAt: new Date().toISOString(),
+        });
+        setActivitiesList((prev) =>
+          prev.map((a) => (a.id === tempId ? { ...a, id: docRef.id } : a))
+        );
+      } catch (e) {
+        console.warn('Error guardando actividad:', e);
+      }
+    }
+
+    Alert.alert('Éxito', editingActivity ? 'Actividad actualizada.' : 'Actividad programada en el calendario.');
+  };
+
+  const handleDeleteActivity = (activity) => {
+    Alert.alert(
+      'Eliminar Actividad',
+      `¿Deseas eliminar "${activity.titulo}"?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: async () => {
+            const updated = activitiesList.filter((a) => a.id !== activity.id);
+            setActivitiesList(updated);
+            try {
+              await AsyncStorage.setItem(userActivitiesKey, JSON.stringify(updated));
+              if (activity.id && !activity.id.startsWith('temp_')) {
+                await deleteDoc(doc(db, 'activities', activity.id));
+              }
+            } catch (e) {
+              console.warn('Error eliminando actividad:', e);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleToggleActivityCompleted = async (activity) => {
+    const updated = activitiesList.map((a) =>
+      a.id === activity.id ? { ...a, completada: !a.completada } : a
+    );
+    setActivitiesList(updated);
+    try {
+      await AsyncStorage.setItem(userActivitiesKey, JSON.stringify(updated));
+      if (activity.id && !activity.id.startsWith('temp_')) {
+        await updateDoc(doc(db, 'activities', activity.id), {
+          completada: !activity.completada,
+        });
+      }
+    } catch (e) {
+      console.warn('Error actualizando completada:', e);
+    }
+  };
 
   const updateLocalCache = async (newList) => {
     setScheduleList(newList);
@@ -825,34 +1279,34 @@ export default function ScheduleScreen() {
         </View>
       </View>
 
-      {/* Pestañas de Vista: Calendario Semanal vs Mis Materias */}
+      {/* Pestañas de Vista: Horario Semanal vs Mis Materias vs Calendario y Actividades */}
       <View style={[styles.tabSegmentContainer, { backgroundColor: isDarkMode ? '#1E293B' : '#F1F5F9' }]}>
         <TouchableOpacity
           style={[
             styles.tabSegmentBtn,
-            activeScheduleTab === 'calendar' && [
+            (activeScheduleTab === 'calendar' || activeScheduleTab === 'weekly') && [
               styles.tabSegmentBtnActive,
               { backgroundColor: theme.card },
             ],
           ]}
-          onPress={() => setActiveScheduleTab('calendar')}
+          onPress={() => setActiveScheduleTab('weekly')}
           activeOpacity={0.8}
         >
           <Ionicons
-            name="calendar"
-            size={normalize(14)}
-            color={activeScheduleTab === 'calendar' ? '#2563EB' : theme.textSecondary}
+            name="time-outline"
+            size={normalize(13)}
+            color={activeScheduleTab === 'calendar' || activeScheduleTab === 'weekly' ? '#2563EB' : theme.textSecondary}
           />
           <Text
             style={[
               styles.tabSegmentText,
               {
-                color: activeScheduleTab === 'calendar' ? '#2563EB' : theme.textSecondary,
-                fontWeight: activeScheduleTab === 'calendar' ? '700' : '600',
+                color: activeScheduleTab === 'calendar' || activeScheduleTab === 'weekly' ? '#2563EB' : theme.textSecondary,
+                fontWeight: activeScheduleTab === 'calendar' || activeScheduleTab === 'weekly' ? '700' : '600',
               },
             ]}
           >
-            Horario Semanal
+            Horario
           </Text>
         </TouchableOpacity>
 
@@ -868,8 +1322,8 @@ export default function ScheduleScreen() {
           activeOpacity={0.8}
         >
           <Ionicons
-            name="book"
-            size={normalize(14)}
+            name="book-outline"
+            size={normalize(13)}
             color={activeScheduleTab === 'subjects' ? '#2563EB' : theme.textSecondary}
           />
           <Text
@@ -881,12 +1335,41 @@ export default function ScheduleScreen() {
               },
             ]}
           >
-            Mis Materias ({uniqueSubjects.length})
+            Materias ({uniqueSubjects.length})
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.tabSegmentBtn,
+            activeScheduleTab === 'activities' && [
+              styles.tabSegmentBtnActive,
+              { backgroundColor: theme.card },
+            ],
+          ]}
+          onPress={() => setActiveScheduleTab('activities')}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name="calendar"
+            size={normalize(13)}
+            color={activeScheduleTab === 'activities' ? '#2563EB' : theme.textSecondary}
+          />
+          <Text
+            style={[
+              styles.tabSegmentText,
+              {
+                color: activeScheduleTab === 'activities' ? '#2563EB' : theme.textSecondary,
+                fontWeight: activeScheduleTab === 'activities' ? '700' : '600',
+              },
+            ]}
+          >
+            Calendario ({activitiesList.length})
           </Text>
         </TouchableOpacity>
       </View>
 
-      {activeScheduleTab === 'calendar' ? (
+      {activeScheduleTab === 'calendar' || activeScheduleTab === 'weekly' ? (
         <>
           {/* 3. Selector de Días de la Semana */}
           <View style={[styles.daySelectorHeader, { backgroundColor: theme.card, borderColor: theme.border }]}>
@@ -1112,7 +1595,7 @@ export default function ScheduleScreen() {
             )}
           </ScrollView>
         </>
-      ) : (
+      ) : activeScheduleTab === 'subjects' ? (
         /* VISTA: LISTA DE MATERIAS ÚNICAS (Agrupa todas sus sesiones/horarios/aulas) */
         <ScrollView
           contentContainerStyle={styles.scrollContent}
@@ -1266,6 +1749,343 @@ export default function ScheduleScreen() {
               </View>
             ))
           )}
+        </ScrollView>
+      ) : (
+        /* VISTA 3: CALENDARIO DE ACTIVIDADES EN DÍAS ESPECÍFICOS (SEPARADO DE MATERIAS) */
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Cabecera del Calendario de Actividades */}
+          <View style={[styles.activityHeaderBanner, { backgroundColor: theme.card, borderColor: theme.border }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.dayTitle, { color: theme.textPrimary }]}>
+                Calendario Académico
+              </Text>
+              <Text style={[styles.classesCountText, { color: theme.textSecondary }]}>
+                {activitiesList.length} {activitiesList.length === 1 ? 'actividad programada' : 'actividades programadas'}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.addClassButton, { backgroundColor: '#7C3AED' }]}
+              onPress={() => handleOpenAddActivity(selectedCalendarDate)}
+            >
+              <Ionicons name="calendar" size={normalize(16)} color="#FFFFFF" />
+              <Text style={styles.addClassButtonText}>+ Nueva Actividad</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Componente de Calendario Mensual Interactivo */}
+          <View style={[styles.calendarCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+            {/* Barra de Navegación de Mes */}
+            <View style={styles.monthNavRow}>
+              <TouchableOpacity
+                onPress={handlePrevMonth}
+                style={[styles.monthNavBtn, { backgroundColor: isDarkMode ? '#334155' : '#F1F5F9' }]}
+              >
+                <Ionicons name="chevron-back" size={normalize(18)} color={theme.textPrimary} />
+              </TouchableOpacity>
+
+              <View style={{ alignItems: 'center' }}>
+                <Text style={[styles.monthNavTitle, { color: theme.textPrimary }]}>
+                  {MONTH_NAMES[calendarMonth]} {calendarYear}
+                </Text>
+                <TouchableOpacity onPress={handleTodayMonth}>
+                  <Text style={{ fontSize: normalize(10.5), color: '#2563EB', fontWeight: '700', marginTop: 2 }}>
+                    Ir a Hoy
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity
+                onPress={handleNextMonth}
+                style={[styles.monthNavBtn, { backgroundColor: isDarkMode ? '#334155' : '#F1F5F9' }]}
+              >
+                <Ionicons name="chevron-forward" size={normalize(18)} color={theme.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Días de la Semana: Lun Mar Mié Jue Vie Sáb Dom */}
+            <View style={styles.weekDaysHeaderRow}>
+              {DAYS_SHORT.map((wd, i) => (
+                <Text key={i} style={[styles.weekDayLabel, { color: theme.textSecondary }]}>
+                  {wd}
+                </Text>
+              ))}
+            </View>
+
+            {/* Cuadrícula de Días */}
+            <View style={styles.calendarGrid}>
+              {calendarGrid.map((cell, idx) => {
+                const isSelected = cell.dateStr === selectedCalendarDate;
+                const isToday = cell.dateStr === formatDateYMD(new Date());
+                const dayActivities = cell.dateStr ? activitiesByDate[cell.dateStr] || [] : [];
+                const hasActivities = dayActivities.length > 0;
+
+                if (!cell.isCurrentMonth) {
+                  return (
+                    <View key={idx} style={styles.calendarDayCell}>
+                      <Text style={[styles.calendarDayNum, { color: isDarkMode ? '#475569' : '#CBD5E1' }]}>
+                        {cell.dayNumber}
+                      </Text>
+                    </View>
+                  );
+                }
+
+                return (
+                  <TouchableOpacity
+                    key={idx}
+                    style={[
+                      styles.calendarDayCell,
+                      isToday && !isSelected && styles.calendarDayToday,
+                      isSelected && styles.calendarDaySelected,
+                    ]}
+                    onPress={() => setSelectedCalendarDate(cell.dateStr)}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[
+                        styles.calendarDayNum,
+                        { color: theme.textPrimary },
+                        isToday && !isSelected && { color: '#2563EB', fontWeight: '800' },
+                        isSelected && { color: '#FFFFFF', fontWeight: '800' },
+                      ]}
+                    >
+                      {cell.dayNumber}
+                    </Text>
+
+                    {hasActivities && (
+                      <View style={styles.dotsRow}>
+                        {dayActivities.slice(0, 3).map((actItem, dotIdx) => {
+                          const typeMeta = getActivityTypeMeta(actItem.tipo);
+                          return (
+                            <View
+                              key={dotIdx}
+                              style={[
+                                styles.activityDot,
+                                { backgroundColor: isSelected ? '#FFFFFF' : typeMeta.color },
+                              ]}
+                            />
+                          );
+                        })}
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* Sección de Actividades del Día Seleccionado */}
+          <View style={[styles.selectedDateCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+            <View style={styles.selectedDateHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.selectedDateTitle, { color: theme.textPrimary }]}>
+                  {formatDateReadable(selectedCalendarDate)}
+                </Text>
+                <Text style={{ fontSize: normalize(11), color: theme.textSecondary }}>
+                  {(activitiesByDate[selectedCalendarDate] || []).length} actividades para este día
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.smallAddBtn, { backgroundColor: '#2563EB' }]}
+                onPress={() => handleOpenAddActivity(selectedCalendarDate)}
+              >
+                <Ionicons name="add" size={normalize(16)} color="#FFFFFF" />
+                <Text style={styles.smallAddBtnText}>Agregar</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Listado de actividades de este día */}
+            {(!activitiesByDate[selectedCalendarDate] || activitiesByDate[selectedCalendarDate].length === 0) ? (
+              <View style={styles.emptyDayBox}>
+                <Ionicons name="calendar-outline" size={normalize(32)} color={theme.textSecondary} />
+                <Text style={[styles.emptyDayText, { color: theme.textSecondary }]}>
+                  No hay actividades programadas para este día.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.createDayActivityBtn, { borderColor: '#7C3AED' }]}
+                  onPress={() => handleOpenAddActivity(selectedCalendarDate)}
+                >
+                  <Ionicons name="add-circle-outline" size={normalize(15)} color="#7C3AED" />
+                  <Text style={{ fontSize: normalize(11), fontWeight: '700', color: '#7C3AED' }}>
+                    Programar actividad aquí
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={{ gap: normalize(8), marginTop: normalize(8) }}>
+                {activitiesByDate[selectedCalendarDate].map((act) => {
+                  const typeMeta = getActivityTypeMeta(act.tipo);
+                  return (
+                    <View
+                      key={act.id}
+                      style={[
+                        styles.activityItemCard,
+                        {
+                          backgroundColor: theme.background,
+                          borderColor: theme.border,
+                          borderLeftColor: typeMeta.color,
+                          borderLeftWidth: 4,
+                        },
+                      ]}
+                    >
+                      <TouchableOpacity
+                        style={styles.activityCheckbox}
+                        onPress={() => handleToggleActivityCompleted(act)}
+                      >
+                        <Ionicons
+                          name={act.completada ? 'checkmark-circle' : 'ellipse-outline'}
+                          size={normalize(22)}
+                          color={act.completada ? '#10B981' : theme.textSecondary}
+                        />
+                      </TouchableOpacity>
+
+                      <View style={{ flex: 1, paddingVertical: normalize(2) }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: normalize(6), marginBottom: 2 }}>
+                          <View style={[styles.typeBadge, { backgroundColor: typeMeta.color + '20' }]}>
+                            <Ionicons name={typeMeta.icon} size={normalize(11)} color={typeMeta.color} />
+                            <Text style={[styles.typeBadgeText, { color: typeMeta.color }]}>
+                              {typeMeta.label}
+                            </Text>
+                          </View>
+                          {act.hora ? (
+                            <View style={styles.timeBadge}>
+                              <Ionicons name="time-outline" size={normalize(11)} color={theme.textSecondary} />
+                              <Text style={[styles.timeBadgeText, { color: theme.textSecondary }]}>
+                                {act.hora}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+
+                        <Text
+                          style={[
+                            styles.activityTitleText,
+                            { color: theme.textPrimary },
+                            act.completada && styles.textCompleted,
+                          ]}
+                        >
+                          {act.titulo}
+                        </Text>
+
+                        {act.materia ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                            <Ionicons name="book-outline" size={normalize(12)} color="#2563EB" />
+                            <Text style={{ fontSize: normalize(11), color: '#2563EB', fontWeight: '600' }}>
+                              {act.materia}
+                            </Text>
+                          </View>
+                        ) : null}
+
+                        {act.lugar ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                            <Ionicons name="location-outline" size={normalize(12)} color={theme.textSecondary} />
+                            <Text style={{ fontSize: normalize(10.5), color: theme.textSecondary }}>
+                              {act.lugar}
+                            </Text>
+                          </View>
+                        ) : null}
+
+                        {act.notas ? (
+                          <Text style={{ fontSize: normalize(10.5), color: theme.textSecondary, marginTop: 4, fontStyle: 'italic' }}>
+                            "{act.notas}"
+                          </Text>
+                        ) : null}
+                      </View>
+
+                      <View style={styles.activityActionsColumn}>
+                        <TouchableOpacity
+                          style={styles.activityActionBtn}
+                          onPress={() => handleOpenEditActivity(act)}
+                        >
+                          <Ionicons name="pencil-outline" size={normalize(16)} color="#2563EB" />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.activityActionBtn}
+                          onPress={() => handleDeleteActivity(act)}
+                        >
+                          <Ionicons name="trash-outline" size={normalize(16)} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+
+          {/* Sección de Próximas Actividades */}
+          {activitiesList.length > 0 && (
+            <View style={[styles.selectedDateCard, { backgroundColor: theme.card, borderColor: theme.border, marginTop: normalize(12) }]}>
+              <View style={styles.selectedDateHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.selectedDateTitle, { color: theme.textPrimary }]}>
+                    Todas las Actividades Registradas
+                  </Text>
+                  <Text style={{ fontSize: normalize(11), color: theme.textSecondary }}>
+                    Cronograma completo ordenado por fecha
+                  </Text>
+                </View>
+              </View>
+
+              <View style={{ gap: normalize(8), marginTop: normalize(8) }}>
+                {activitiesList.map((act) => {
+                  const typeMeta = getActivityTypeMeta(act.tipo);
+                  return (
+                    <TouchableOpacity
+                      key={act.id}
+                      style={[
+                        styles.upcomingItemRow,
+                        {
+                          backgroundColor: theme.background,
+                          borderColor: theme.border,
+                        },
+                      ]}
+                      onPress={() => {
+                        setSelectedCalendarDate(act.fecha);
+                        const parts = (act.fecha || '').split('-');
+                        if (parts.length === 3) {
+                          setCalendarMonthDate(new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, 1));
+                        }
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[styles.dateBadgeColumn, { backgroundColor: typeMeta.color + '15' }]}>
+                        <Text style={[styles.dateBadgeDay, { color: typeMeta.color }]}>
+                          {act.fecha ? act.fecha.split('-')[2] : '--'}
+                        </Text>
+                        <Text style={[styles.dateBadgeMonth, { color: typeMeta.color }]}>
+                          {act.fecha ? MONTH_NAMES[parseInt(act.fecha.split('-')[1], 10) - 1]?.substring(0, 3).toUpperCase() : ''}
+                        </Text>
+                      </View>
+
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={[styles.upcomingTitle, { color: theme.textPrimary }, act.completada && styles.textCompleted]}>
+                            {act.titulo}
+                          </Text>
+                          {act.completada && (
+                            <Ionicons name="checkmark-circle" size={normalize(14)} color="#10B981" />
+                          )}
+                        </View>
+                        <Text style={{ fontSize: normalize(10.5), color: theme.textSecondary, marginTop: 1 }}>
+                          {typeMeta.label} • {act.hora || 'Sin hora'} {act.materia ? `• ${act.materia}` : ''}
+                        </Text>
+                      </View>
+
+                      <Ionicons name="chevron-forward" size={normalize(14)} color={theme.textSecondary} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+
+          <View style={{ height: normalize(40) }} />
         </ScrollView>
       )}
 
@@ -1707,6 +2527,332 @@ export default function ScheduleScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* ── MODAL: NUEVA / EDITAR ACTIVIDAD EN DÍA ESPECÍFICO (CALENDARIO) ── */}
+      <Modal
+        visible={activityModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setActivityModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: theme.card, maxHeight: '90%' }]}>
+            <View style={styles.modalHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.modalTitleText, { color: theme.textPrimary }]}>
+                  {editingActivity ? 'Editar Actividad' : 'Nueva Actividad'}
+                </Text>
+                <Text style={{ fontSize: normalize(10.5), color: theme.textSecondary }}>
+                  Asigna tareas, parciales o eventos a fechas específicas
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setActivityModalVisible(false)}>
+                <Ionicons name="close" size={normalize(22)} color={theme.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Título de la actividad */}
+              <Text style={[styles.inputLabel, { color: theme.textPrimary }]}>Título de la Actividad *</Text>
+              <TextInput
+                style={[
+                  styles.textInput,
+                  { backgroundColor: theme.background, borderColor: theme.border, color: theme.textPrimary },
+                ]}
+                placeholder="Ej. Parcial 1, Entrega de Proyecto..."
+                placeholderTextColor={theme.textSecondary}
+                value={actTitulo}
+                onChangeText={setActTitulo}
+              />
+
+              {/* Tipo de Actividad con opción para agregar más */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: normalize(10) }}>
+                <Text style={[styles.inputLabel, { color: theme.textPrimary, marginBottom: 0 }]}>
+                  Tipo de Actividad
+                </Text>
+                <TouchableOpacity
+                  onPress={() => setShowAddTypeInput(!showAddTypeInput)}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                >
+                  <Ionicons name={showAddTypeInput ? 'close-circle' : 'add-circle'} size={normalize(14)} color="#2563EB" />
+                  <Text style={{ fontSize: normalize(11), color: '#2563EB', fontWeight: '700' }}>
+                    {showAddTypeInput ? 'Cancelar' : '+ Nuevo Tipo'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Formulario desplegable para agregar nuevo tipo de actividad */}
+              {showAddTypeInput && (
+                <View style={[styles.addTypeBox, { backgroundColor: theme.background, borderColor: theme.border }]}>
+                  <Text style={{ fontSize: normalize(11), fontWeight: '700', color: theme.textPrimary }}>
+                    Crear nuevo tipo de actividad:
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: normalize(6), marginTop: normalize(4) }}>
+                    <TextInput
+                      style={[
+                        styles.smallInput,
+                        { flex: 1, backgroundColor: theme.card, color: theme.textPrimary, borderColor: theme.border },
+                      ]}
+                      placeholder="Ej. Tesis, Exposición, Taller..."
+                      placeholderTextColor={theme.textSecondary}
+                      value={newTypeNameInput}
+                      onChangeText={setNewTypeNameInput}
+                    />
+                    <TouchableOpacity
+                      style={[styles.smallCardBtn, { backgroundColor: newTypeColorSelected, paddingHorizontal: normalize(12) }]}
+                      onPress={handleCreateCustomActivityType}
+                    >
+                      <Text style={styles.smallCardBtnText}>Guardar</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Selector de color para el nuevo tipo */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: normalize(8), marginTop: normalize(6) }}>
+                    <Text style={{ fontSize: normalize(10), color: theme.textSecondary }}>Color distintivo:</Text>
+                    {COLOR_PALETTE.map((c, i) => (
+                      <TouchableOpacity
+                        key={i}
+                        onPress={() => setNewTypeColorSelected(c)}
+                        style={[
+                          styles.colorDotSelect,
+                          { backgroundColor: c },
+                          newTypeColorSelected === c && styles.colorDotSelected,
+                        ]}
+                      />
+                    ))}
+                  </View>
+                </View>
+              )}
+
+              {/* Chips horizontales de todos los tipos (por defecto + personalizados) */}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: normalize(4) }}>
+                {allActivityTypes.map((t) => {
+                  const isSel = (actTipo || '').toLowerCase() === (t.id || '').toLowerCase() ||
+                                (actTipo || '').toLowerCase() === (t.label || '').toLowerCase();
+                  const isCustom = customActivityTypes.some((ct) => ct.id === t.id);
+                  return (
+                    <TouchableOpacity
+                      key={t.id}
+                      style={[
+                        styles.activityTypeChip,
+                        {
+                          borderColor: isSel ? t.color : theme.border,
+                          backgroundColor: isSel ? t.color : theme.background,
+                        },
+                      ]}
+                      onPress={() => setActTipo(t.label || t.id)}
+                      onLongPress={() => {
+                        if (isCustom) handleDeleteCustomActivityType(t);
+                      }}
+                      delayLongPress={500}
+                    >
+                      <Ionicons
+                        name={t.icon || 'bookmark'}
+                        size={normalize(13)}
+                        color={isSel ? '#FFFFFF' : t.color}
+                      />
+                      <Text
+                        style={[
+                          styles.activityTypeChipText,
+                          { color: isSel ? '#FFFFFF' : theme.textPrimary, fontWeight: isSel ? '700' : '500' },
+                        ]}
+                      >
+                        {t.label || t.name}
+                      </Text>
+
+                      {isCustom && (
+                        <TouchableOpacity
+                          onPress={() => handleDeleteCustomActivityType(t)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          style={{ marginLeft: 4 }}
+                        >
+                          <Ionicons
+                            name="close-circle"
+                            size={normalize(13)}
+                            color={isSel ? '#FFFFFF' : '#EF4444'}
+                          />
+                        </TouchableOpacity>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+
+                <TouchableOpacity
+                  style={[
+                    styles.activityTypeChip,
+                    {
+                      borderColor: '#2563EB',
+                      backgroundColor: 'transparent',
+                      borderStyle: 'dashed',
+                    },
+                  ]}
+                  onPress={() => setShowAddTypeInput(true)}
+                >
+                  <Ionicons name="add" size={normalize(14)} color="#2563EB" />
+                  <Text style={[styles.activityTypeChipText, { color: '#2563EB', fontWeight: '700' }]}>
+                    + Otro Tipo
+                  </Text>
+                </TouchableOpacity>
+              </ScrollView>
+
+              {/* Fecha y Hora en Fila */}
+              <View style={{ flexDirection: 'row', gap: normalize(10), marginTop: normalize(8) }}>
+                {/* Fecha */}
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.inputLabel, { color: theme.textPrimary }]}>Fecha (Día Específico) *</Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.dateTimeSelectorBtn,
+                      { backgroundColor: theme.background, borderColor: theme.border },
+                    ]}
+                    onPress={() => setActDatePickerVisible(true)}
+                  >
+                    <Ionicons name="calendar-outline" size={normalize(16)} color="#2563EB" />
+                    <Text style={[styles.dateTimeSelectorText, { color: theme.textPrimary }]}>
+                      {actFecha || 'Seleccionar fecha'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Hora */}
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.inputLabel, { color: theme.textPrimary }]}>Hora Programada</Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.dateTimeSelectorBtn,
+                      { backgroundColor: theme.background, borderColor: theme.border },
+                    ]}
+                    onPress={() => setActTimePickerVisible(true)}
+                  >
+                    <Ionicons name="time-outline" size={normalize(16)} color="#2563EB" />
+                    <Text style={[styles.dateTimeSelectorText, { color: theme.textPrimary }]}>
+                      {actHora || 'Seleccionar hora'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Materia Vinculada (Opcional) */}
+              <Text style={[styles.inputLabel, { color: theme.textPrimary, marginTop: normalize(10) }]}>
+                Materia Asociada (Opcional)
+              </Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: normalize(4) }}>
+                <TouchableOpacity
+                  style={[
+                    styles.subjectChip,
+                    {
+                      borderColor: !actMateria ? '#2563EB' : theme.border,
+                      backgroundColor: !actMateria ? '#2563EB' : theme.background,
+                    },
+                  ]}
+                  onPress={() => setActMateria('')}
+                >
+                  <Text style={{ fontSize: normalize(10.5), color: !actMateria ? '#FFFFFF' : theme.textPrimary, fontWeight: !actMateria ? '700' : '500' }}>
+                    Ninguna / General
+                  </Text>
+                </TouchableOpacity>
+
+                {uniqueSubjects.map((sub, i) => {
+                  const isSel = actMateria === sub.materia;
+                  return (
+                    <TouchableOpacity
+                      key={i}
+                      style={[
+                        styles.subjectChip,
+                        {
+                          borderColor: isSel ? '#2563EB' : theme.border,
+                          backgroundColor: isSel ? '#2563EB' : theme.background,
+                        },
+                      ]}
+                      onPress={() => setActMateria(sub.materia)}
+                    >
+                      <Text style={{ fontSize: normalize(10.5), color: isSel ? '#FFFFFF' : theme.textPrimary, fontWeight: isSel ? '700' : '500' }}>
+                        {sub.materia}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+
+              {/* Lugar / Aula */}
+              <Text style={[styles.inputLabel, { color: theme.textPrimary, marginTop: normalize(8) }]}>
+                Lugar / Aula / Enlace (Opcional)
+              </Text>
+              <TextInput
+                style={[
+                  styles.textInput,
+                  { backgroundColor: theme.background, borderColor: theme.border, color: theme.textPrimary },
+                ]}
+                placeholder="Ej. Edificio 3 Aula 201, Teams, etc."
+                placeholderTextColor={theme.textSecondary}
+                value={actLugar}
+                onChangeText={setActLugar}
+              />
+
+              {/* Notas Adicionales */}
+              <Text style={[styles.inputLabel, { color: theme.textPrimary, marginTop: normalize(8) }]}>
+                Notas o Instrucciones (Opcional)
+              </Text>
+              <TextInput
+                style={[
+                  styles.textInput,
+                  {
+                    backgroundColor: theme.background,
+                    borderColor: theme.border,
+                    color: theme.textPrimary,
+                    height: normalize(60),
+                    textAlignVertical: 'top',
+                  },
+                ]}
+                placeholder="Ej. Llevar carnet, entrega en formato PDF..."
+                placeholderTextColor={theme.textSecondary}
+                value={actNotas}
+                onChangeText={setActNotas}
+                multiline
+              />
+
+              {/* Botón Guardar */}
+              <TouchableOpacity
+                style={[styles.saveClassButton, { backgroundColor: '#7C3AED', marginTop: normalize(16) }]}
+                onPress={handleSaveActivity}
+              >
+                <Ionicons name="checkmark-circle" size={normalize(18)} color="#FFFFFF" />
+                <Text style={styles.saveClassButtonText}>
+                  {editingActivity ? 'Guardar Cambios' : 'Crear Actividad'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.cancelBtn, { marginTop: normalize(8) }]}
+                onPress={() => setActivityModalVisible(false)}
+              >
+                <Text style={[styles.cancelBtnText, { color: theme.textSecondary }]}>Cancelar</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* DateTimePicker de Fecha para Actividad */}
+      {actDatePickerVisible && (
+        <DateTimePicker
+          value={actFecha ? new Date(actFecha + 'T12:00:00') : new Date()}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={onActivityDateChange}
+        />
+      )}
+
+      {/* DateTimePicker de Hora para Actividad */}
+      {actTimePickerVisible && (
+        <DateTimePicker
+          value={parseTimeStringToDate(actHora)}
+          mode="time"
+          is24Hour={false}
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={onActivityTimeChange}
+        />
+      )}
     </View>
   );
 }
@@ -2344,5 +3490,260 @@ const styles = StyleSheet.create({
   quickSubjectChipText: {
     fontSize: normalize(11),
     fontWeight: '700',
+  },
+  // ── ESTILOS DEL CALENDARIO Y ACTIVIDADES ──
+  activityHeaderBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: normalize(12),
+    borderRadius: normalize(12),
+    borderWidth: 1,
+    marginBottom: normalize(10),
+  },
+  calendarCard: {
+    borderRadius: normalize(12),
+    borderWidth: 1,
+    padding: normalize(12),
+    marginBottom: normalize(12),
+  },
+  monthNavRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: normalize(10),
+  },
+  monthNavBtn: {
+    width: normalize(32),
+    height: normalize(32),
+    borderRadius: normalize(16),
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  monthNavTitle: {
+    fontSize: normalize(15),
+    fontWeight: '800',
+  },
+  weekDaysHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingBottom: normalize(6),
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(150, 150, 150, 0.1)',
+    marginBottom: normalize(4),
+  },
+  weekDayLabel: {
+    fontSize: normalize(11),
+    fontWeight: '700',
+    width: (SCREEN_WIDTH - normalize(64)) / 7,
+    textAlign: 'center',
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  calendarDayCell: {
+    width: (SCREEN_WIDTH - normalize(64)) / 7,
+    height: normalize(40),
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: normalize(2),
+    borderRadius: normalize(8),
+  },
+  calendarDayToday: {
+    borderWidth: 1.5,
+    borderColor: '#2563EB',
+  },
+  calendarDaySelected: {
+    backgroundColor: '#2563EB',
+    borderRadius: normalize(8),
+  },
+  calendarDayNum: {
+    fontSize: normalize(12),
+    fontWeight: '600',
+  },
+  dotsRow: {
+    flexDirection: 'row',
+    gap: 2,
+    marginTop: 2,
+  },
+  activityDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+  },
+  selectedDateCard: {
+    borderRadius: normalize(12),
+    borderWidth: 1,
+    padding: normalize(12),
+  },
+  selectedDateHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: normalize(6),
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(150, 150, 150, 0.1)',
+  },
+  selectedDateTitle: {
+    fontSize: normalize(13),
+    fontWeight: '800',
+  },
+  smallAddBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: normalize(10),
+    paddingVertical: normalize(6),
+    borderRadius: normalize(8),
+  },
+  smallAddBtnText: {
+    color: '#FFFFFF',
+    fontSize: normalize(11),
+    fontWeight: '700',
+  },
+  emptyDayBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: normalize(20),
+    gap: normalize(6),
+  },
+  emptyDayText: {
+    fontSize: normalize(12),
+    textAlign: 'center',
+  },
+  createDayActivityBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: normalize(12),
+    paddingVertical: normalize(6),
+    borderRadius: normalize(8),
+    borderWidth: 1,
+    marginTop: normalize(4),
+  },
+  activityItemCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    borderRadius: normalize(10),
+    borderWidth: 1,
+    padding: normalize(10),
+    gap: normalize(10),
+  },
+  activityCheckbox: {
+    paddingTop: normalize(2),
+  },
+  typeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: normalize(6),
+    paddingVertical: normalize(2),
+    borderRadius: normalize(6),
+  },
+  typeBadgeText: {
+    fontSize: normalize(10),
+    fontWeight: '700',
+  },
+  timeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  timeBadgeText: {
+    fontSize: normalize(10.5),
+    fontWeight: '600',
+  },
+  activityTitleText: {
+    fontSize: normalize(13),
+    fontWeight: '700',
+  },
+  textCompleted: {
+    textDecorationLine: 'line-through',
+    opacity: 0.6,
+  },
+  activityActionsColumn: {
+    gap: normalize(6),
+    alignItems: 'center',
+  },
+  activityActionBtn: {
+    padding: normalize(4),
+  },
+  upcomingItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: normalize(10),
+    borderWidth: 1,
+    padding: normalize(8),
+    gap: normalize(10),
+  },
+  dateBadgeColumn: {
+    width: normalize(42),
+    height: normalize(42),
+    borderRadius: normalize(8),
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dateBadgeDay: {
+    fontSize: normalize(14),
+    fontWeight: '800',
+    lineHeight: normalize(16),
+  },
+  dateBadgeMonth: {
+    fontSize: normalize(9),
+    fontWeight: '800',
+  },
+  upcomingTitle: {
+    fontSize: normalize(12),
+    fontWeight: '700',
+  },
+  activityTypeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: normalize(10),
+    paddingVertical: normalize(6),
+    borderRadius: normalize(8),
+    borderWidth: 1,
+    marginRight: normalize(6),
+  },
+  activityTypeChipText: {
+    fontSize: normalize(11),
+  },
+  dateTimeSelectorBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: normalize(10),
+    paddingVertical: normalize(10),
+    borderRadius: normalize(8),
+    borderWidth: 1,
+    marginTop: normalize(4),
+  },
+  dateTimeSelectorText: {
+    fontSize: normalize(12),
+    fontWeight: '600',
+  },
+  subjectChip: {
+    paddingHorizontal: normalize(10),
+    paddingVertical: normalize(6),
+    borderRadius: normalize(8),
+    borderWidth: 1,
+    marginRight: normalize(6),
+  },
+  addTypeBox: {
+    borderRadius: normalize(8),
+    borderWidth: 1,
+    padding: normalize(10),
+    marginVertical: normalize(6),
+  },
+  colorDotSelect: {
+    width: normalize(20),
+    height: normalize(20),
+    borderRadius: normalize(10),
+  },
+  colorDotSelected: {
+    borderWidth: 2.5,
+    borderColor: '#0F172A',
   },
 });

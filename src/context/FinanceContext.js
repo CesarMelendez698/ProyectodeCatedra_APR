@@ -20,6 +20,7 @@ import {
   where, 
   onSnapshot 
 } from 'firebase/firestore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AuthContext } from './AuthContext';
 import { db } from '../config/firebase';
 import * as NavigationService from '../utils/NavigationService'; 
@@ -118,8 +119,12 @@ export const FinanceProvider = ({ children }) => {
     const qAccounts = query(collection(db, 'accounts'), where('userId', '==', user.email));
     unsubscribes.push(onSnapshot(qAccounts, async (snapshot) => {
       const accList = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
-      if (accList.length === 0 && !snapshot.metadata.fromCache) {
-        const defaultAccounts = ['Efectivo', 'Tarjeta de Crédito', 'Cuenta Banco'];
+      const userAccInitKey = `@user_accounts_initialized_${user.email}`;
+      const isInitialized = await AsyncStorage.getItem(userAccInitKey);
+
+      if (!isInitialized && accList.length === 0 && !snapshot.metadata.fromCache) {
+        await AsyncStorage.setItem(userAccInitKey, 'true');
+        const defaultAccounts = ['Efectivo', 'Tarjeta', 'Cuenta Bancaria'];
         Promise.all(defaultAccounts.map(name => 
           addDoc(collection(db, 'accounts'), { name, userId: user.email })
         )).catch(err => console.log("Error creando cuentas iniciales:", err));
@@ -314,21 +319,26 @@ export const FinanceProvider = ({ children }) => {
 
   // Cuentas: respuesta inmediata
   const addAccount = useCallback(async (name) => { 
-    if (!user?.email) return;
+    if (!user?.email || !name || !name.trim()) return;
+    const cleanName = name.trim();
     const tempId = `temp_acc_${Date.now()}`;
-    setAccounts(prev => [...prev, { id: tempId, name, userId: user.email }]);
+    setAccounts(prev => [...prev, { id: tempId, name: cleanName, userId: user.email }]);
 
     try {
-      await addDoc(collection(db, 'accounts'), { name, userId: user.email }); 
+      await addDoc(collection(db, 'accounts'), { name: cleanName, userId: user.email }); 
     } catch (e) {
+      console.warn('Error guardando cuenta en la nube:', e);
       setAccounts(prev => prev.filter(a => a.id !== tempId));
     }
   }, [user]);
 
   const deleteAccount = useCallback(async (id) => { 
+    if (!id) return;
     setAccounts(prev => prev.filter(a => a.id !== id));
     try { 
-      await deleteDoc(doc(db, 'accounts', id)); 
+      if (!id.startsWith('temp_') && !id.startsWith('default_')) {
+        await deleteDoc(doc(db, 'accounts', id)); 
+      }
     } catch (e) { 
       console.warn('Error borrando cuenta:', e);
     } 

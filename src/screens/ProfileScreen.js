@@ -45,6 +45,12 @@ const CAREERS_UDB = [
   'Licenciatura en Idioma Inglés',
 ];
 
+const CAMPUSES_UDB = [
+  { id: 'antiguo_cuscatlan', name: 'Campus Antiguo Cuscatlán', icon: 'business-outline', desc: 'Sede Antiguo Cuscatlán' },
+  { id: 'soyapango', name: 'Campus Soyapango', icon: 'school-outline', desc: 'Sede Central Soyapango' },
+  { id: 'virtual', name: 'UDB Virtual', icon: 'globe-outline', desc: 'Educación a Distancia y Plataforma Virtual' },
+];
+
 export default function ProfileScreen({ navigation }) {
   const { user, logout, resetPassword } = useContext(AuthContext);
   const { theme, isDarkMode, toggleTheme } = useContext(ThemeContext);
@@ -59,19 +65,24 @@ export default function ProfileScreen({ navigation }) {
   const [cycleModalVisible, setCycleModalVisible] = useState(false);
   const [customCycleInput, setCustomCycleInput] = useState('');
 
+  const [campus, setCampus] = useState('Campus Soyapango');
+  const [campusModalVisible, setCampusModalVisible] = useState(false);
+
   const userCareerKey = user?.email ? `${STORAGE_CAREER}_${user.email}` : STORAGE_CAREER;
   const userScheduleKey = user?.email ? `${STORAGE_SCHEDULE}_${user.email}` : STORAGE_SCHEDULE;
   const userCycleKey = user?.email ? `@user_udb_cycle_${user.email}` : '@user_udb_cycle';
+  const userCampusKey = user?.email ? `@user_udb_campus_${user.email}` : '@user_udb_campus';
 
   const { balance = 0 } = useMemo(() => {
     return getMonthSummary ? getMonthSummary(transactions) : { balance: 0 };
   }, [getMonthSummary, transactions]);
 
-  // Cargar carrera, ciclo y conteo de materias desde almacenamiento local aislado
+  // Cargar carrera, ciclo, campus y conteo de materias desde almacenamiento local aislado
   useEffect(() => {
     // Resetear inmediatamente para evitar mostrar datos de cuenta previa
     setCareer('');
     setCycle('Ciclo 01');
+    setCampus('Campus Soyapango');
     setScheduleCount(0);
 
     const loadAcademicData = async () => {
@@ -81,6 +92,9 @@ export default function ProfileScreen({ navigation }) {
 
         const savedCycle = await AsyncStorage.getItem(userCycleKey);
         setCycle(savedCycle || 'Ciclo 01');
+
+        const savedCampus = await AsyncStorage.getItem(userCampusKey);
+        setCampus(savedCampus || 'Campus Soyapango');
 
         const savedSchedule = await AsyncStorage.getItem(userScheduleKey);
         if (savedSchedule) {
@@ -102,7 +116,18 @@ export default function ProfileScreen({ navigation }) {
       }
     };
     loadAcademicData();
-  }, [userCareerKey, userScheduleKey, userCycleKey]);
+  }, [userCareerKey, userScheduleKey, userCycleKey, userCampusKey]);
+
+  const handleSelectCampus = async (selected) => {
+    setCampus(selected);
+    setCampusModalVisible(false);
+    try {
+      await AsyncStorage.setItem(userCampusKey, selected);
+      Alert.alert('Campus Actualizado', `Tu sede seleccionada es: ${selected}`);
+    } catch (e) {
+      console.warn('Error guardando campus:', e);
+    }
+  };
 
 
   const handleSelectCareer = async (selected) => {
@@ -226,17 +251,22 @@ export default function ProfileScreen({ navigation }) {
 
         <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-        <View style={styles.infoRow}>
+        <TouchableOpacity
+          style={styles.infoRow}
+          onPress={() => setCampusModalVisible(true)}
+          activeOpacity={0.7}
+        >
           <View style={[styles.infoIconCircle, { backgroundColor: '#ECFDF5' }]}>
             <Ionicons name="location-outline" size={normalize(18)} color="#059669" />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.infoLabel, { color: theme.textSecondary }]}>Campus</Text>
+            <Text style={[styles.infoLabel, { color: theme.textSecondary }]}>Campus Universitario</Text>
             <Text style={[styles.infoValue, { color: theme.textPrimary }]}>
-              Campus Soyapango / Virtual
+              {campus || 'Seleccionar campus...'}
             </Text>
           </View>
-        </View>
+          <Ionicons name="pencil-outline" size={normalize(16)} color="#2563EB" />
+        </TouchableOpacity>
 
         <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
@@ -549,6 +579,86 @@ export default function ProfileScreen({ navigation }) {
                   <Text style={styles.customCareerBtnText}>Guardar</Text>
                 </TouchableOpacity>
               </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── MODAL: SELECCIÓN DE CAMPUS ── */}
+      <Modal
+        visible={campusModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setCampusModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: theme.card }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitleText, { color: theme.textPrimary }]}>
+                Selecciona tu Campus UDB
+              </Text>
+              <TouchableOpacity onPress={() => setCampusModalVisible(false)}>
+                <Ionicons name="close" size={normalize(22)} color={theme.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: normalize(320) }}>
+              {CAMPUSES_UDB.map((camp) => {
+                const isSelected = campus === camp.name;
+                return (
+                  <TouchableOpacity
+                    key={camp.id}
+                    style={[
+                      styles.careerSelectItem,
+                      {
+                        borderColor: theme.border,
+                        backgroundColor: isSelected ? (isDarkMode ? '#1E3A8A' : '#EFF6FF') : 'transparent',
+                        paddingVertical: normalize(12),
+                      },
+                    ]}
+                    onPress={() => handleSelectCampus(camp.name)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: normalize(10), flex: 1 }}>
+                      <View
+                        style={[
+                          styles.infoIconCircle,
+                          {
+                            backgroundColor: isSelected ? '#2563EB' : isDarkMode ? '#334155' : '#F1F5F9',
+                            width: normalize(32),
+                            height: normalize(32),
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name={camp.icon}
+                          size={normalize(16)}
+                          color={isSelected ? '#FFFFFF' : '#2563EB'}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.careerSelectText,
+                            {
+                              color: isSelected ? '#2563EB' : theme.textPrimary,
+                              fontWeight: isSelected ? '700' : '600',
+                            },
+                          ]}
+                        >
+                          {camp.name}
+                        </Text>
+                        <Text style={{ fontSize: normalize(10), color: theme.textSecondary, marginTop: 2 }}>
+                          {camp.desc}
+                        </Text>
+                      </View>
+                    </View>
+                    {isSelected && (
+                      <Ionicons name="checkmark-circle" size={normalize(20)} color="#2563EB" />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
           </View>
         </View>

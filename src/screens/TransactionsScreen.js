@@ -34,7 +34,7 @@ function normalize(size) {
 const DEFAULT_ACCOUNTS = [
   { id: 'default_efectivo', name: 'Efectivo' },
   { id: 'default_tarjeta', name: 'Tarjeta' },
-  { id: 'default_banco', name: 'Cuenta banco' }
+  { id: 'default_cuenta_bancaria', name: 'Cuenta Bancaria' }
 ];
 
 export default function TransactionsScreen() {
@@ -88,8 +88,10 @@ export default function TransactionsScreen() {
   // --- MODAL TICKET COMPROBANTE ---
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [isTicketVisible, setIsTicketVisible] = useState(false);
+  const [deletedAccountIds, setDeletedAccountIds] = useState([]);
 
-  const displayAccounts = accounts.length > 0 ? accounts : DEFAULT_ACCOUNTS;
+  const rawAccounts = accounts.length > 0 ? accounts : DEFAULT_ACCOUNTS;
+  const displayAccounts = rawAccounts.filter(a => !deletedAccountIds.includes(a.id));
 
   useEffect(() => {
     const initializeDefaultAccounts = async () => {
@@ -97,7 +99,7 @@ export default function TransactionsScreen() {
         try {
           await addAccount('Efectivo');
           await addAccount('Tarjeta');
-          await addAccount('Cuenta banco');
+          await addAccount('Cuenta Bancaria');
         } catch (error) {
           console.log('Error al inicializar cuentas:', error);
         }
@@ -107,7 +109,7 @@ export default function TransactionsScreen() {
   }, [accounts.length]);
 
   useEffect(() => {
-    if (displayAccounts.length > 0 && !accountId) {
+    if (displayAccounts.length > 0 && (!accountId || !displayAccounts.some(a => a.id === accountId))) {
       setAccountId(displayAccounts[0].id);
     }
   }, [displayAccounts, accountId]);
@@ -236,17 +238,9 @@ export default function TransactionsScreen() {
   };
 
   const confirmDeleteAccount = (account) => {
-    const protectedNames = ['efectivo', 'tarjeta', 'cuenta banco', 'banco'];
-    const currentNameClean = account.name.toLowerCase().trim();
-    
-    if (account.id.startsWith('default_') || protectedNames.includes(currentNameClean)) {
-      Alert.alert('Acceso Denegado', 'Esta cuenta es requerida por el sistema.');
-      return;
-    }
-
     Alert.alert(
       'Eliminar Cuenta',
-      `¿Estás seguro de borrar "${account.name}"?`,
+      `¿Deseas eliminar la cuenta "${account.name}"? Los movimientos que tengan asignada esta cuenta mantendrán su registro contable intacto.`,
       [
         { text: 'Cancelar', style: 'cancel' },
         { 
@@ -254,8 +248,18 @@ export default function TransactionsScreen() {
           style: 'destructive', 
           onPress: async () => {
             try {
-              await deleteAccount(account.id);
-              if (accountId === account.id) setAccountId('');
+              setDeletedAccountIds(prev => [...prev, account.id]);
+              if (typeof deleteAccount === 'function') {
+                await deleteAccount(account.id);
+              }
+              if (accountId === account.id) {
+                const remaining = displayAccounts.filter(a => a.id !== account.id);
+                setAccountId(remaining.length > 0 ? remaining[0].id : '');
+              }
+              if (filterAccount === account.id) {
+                setFilterAccount('all');
+              }
+              Alert.alert('Éxito', `Cuenta "${account.name}" eliminada.`);
             } catch (error) {
               Alert.alert('Error', 'No se pudo eliminar la cuenta.');
             }
@@ -1157,11 +1161,11 @@ export default function TransactionsScreen() {
             <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: Dimensions.get('window').height * 0.65 }}>
               {/* Sección Crear Cuenta */}
               <View style={[styles.catalogSectionCard, { backgroundColor: theme.background, borderColor: theme.border }]}>
-                <Text style={[styles.catalogSectionTitle, { color: theme.textPrimary }]}>💳 Agregar Cuenta Bancaria o Billetera</Text>
+                <Text style={[styles.catalogSectionTitle, { color: theme.textPrimary }]}>💳 Cuentas del Sistema y Billeteras</Text>
                 <View style={{ flexDirection: 'row', gap: normalize(6), marginTop: normalize(4) }}>
                   <TextInput 
                     style={[styles.smallInput, { flex: 1, backgroundColor: theme.card, color: theme.textPrimary, borderColor: theme.border }]} 
-                    placeholder="Ej. Débito UDB, Ahorros..." 
+                    placeholder="Ej. Ahorro Personal, Cooperativa..." 
                     placeholderTextColor={theme.textSecondary}
                     value={newAccountName} 
                     onChangeText={setNewAccountName} 
@@ -1176,12 +1180,54 @@ export default function TransactionsScreen() {
                       Alert.alert('Éxito', 'Cuenta creada con éxito.');
                     }}
                   >
-                    <Text style={styles.smallCardBtnText}>Crear</Text>
+                    <Text style={styles.smallCardBtnText}>Agregar</Text>
                   </TouchableOpacity>
                 </View>
-                <Text style={{ fontSize: normalize(9), color: theme.textSecondary, marginTop: 4 }}>
-                  Tip: Para borrar una cuenta personalizada, manténla presionada en el formulario.
-                </Text>
+
+                {/* Listado de Cuentas Existentes con opción de eliminar */}
+                <View style={{ marginTop: normalize(10) }}>
+                  <Text style={{ fontSize: normalize(10), fontWeight: '700', color: theme.textSecondary, marginBottom: normalize(4) }}>
+                    Cuentas disponibles ({displayAccounts.length}):
+                  </Text>
+                  {displayAccounts.map(acc => (
+                    <View 
+                      key={acc.id} 
+                      style={{
+                        flexDirection: 'row', 
+                        alignItems: 'center', 
+                        justifyContent: 'space-between',
+                        paddingVertical: normalize(7),
+                        paddingHorizontal: normalize(10),
+                        borderRadius: normalize(8),
+                        borderWidth: 1,
+                        borderColor: theme.border,
+                        backgroundColor: theme.card,
+                        marginBottom: normalize(4),
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: normalize(8) }}>
+                        <Ionicons 
+                          name={
+                            acc.name.toLowerCase().includes('efectivo') ? 'cash-outline' :
+                            acc.name.toLowerCase().includes('tarjeta') ? 'card-outline' :
+                            acc.name.toLowerCase().includes('banc') ? 'business-outline' : 'wallet-outline'
+                          } 
+                          size={normalize(16)} 
+                          color={theme.accent} 
+                        />
+                        <Text style={{ fontSize: normalize(11), fontWeight: '600', color: theme.textPrimary }}>
+                          {acc.name}
+                        </Text>
+                      </View>
+                      <TouchableOpacity 
+                        onPress={() => confirmDeleteAccount(acc)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Ionicons name="trash-outline" size={normalize(16)} color="#EF4444" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
               </View>
 
               {/* Sección Crear Categoría */}
