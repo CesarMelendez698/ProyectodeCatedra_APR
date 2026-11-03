@@ -15,6 +15,8 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { db } from '../config/firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { AuthContext } from '../context/AuthContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { FinanceContext } from '../context/FinanceContext';
@@ -96,6 +98,30 @@ export default function ProfileScreen({ navigation }) {
         const savedCampus = await AsyncStorage.getItem(userCampusKey);
         setCampus(savedCampus || 'Campus Soyapango');
 
+        // Si no estaban en caché local, buscar el perfil inicial en Firestore
+        if (user?.email && (!savedCareer || !savedCampus || !savedCycle)) {
+          try {
+            const userDocSnap = await getDoc(doc(db, 'users', user.email));
+            if (userDocSnap.exists()) {
+              const uData = userDocSnap.data();
+              if (uData.career && !savedCareer) {
+                setCareer(uData.career);
+                await AsyncStorage.setItem(userCareerKey, uData.career);
+              }
+              if (uData.cycle && !savedCycle) {
+                setCycle(uData.cycle);
+                await AsyncStorage.setItem(userCycleKey, uData.cycle);
+              }
+              if (uData.campus && !savedCampus) {
+                setCampus(uData.campus);
+                await AsyncStorage.setItem(userCampusKey, uData.campus);
+              }
+            }
+          } catch (cloudErr) {
+            console.warn('Error sincronizando perfil desde Firestore:', cloudErr);
+          }
+        }
+
         const savedSchedule = await AsyncStorage.getItem(userScheduleKey);
         if (savedSchedule) {
           const parsed = JSON.parse(savedSchedule);
@@ -123,6 +149,9 @@ export default function ProfileScreen({ navigation }) {
     setCampusModalVisible(false);
     try {
       await AsyncStorage.setItem(userCampusKey, selected);
+      if (user?.email) {
+        setDoc(doc(db, 'users', user.email), { campus: selected }, { merge: true }).catch(() => {});
+      }
       Alert.alert('Campus Actualizado', `Tu sede seleccionada es: ${selected}`);
     } catch (e) {
       console.warn('Error guardando campus:', e);
@@ -135,6 +164,9 @@ export default function ProfileScreen({ navigation }) {
     setCareerModalVisible(false);
     try {
       await AsyncStorage.setItem(userCareerKey, selected);
+      if (user?.email) {
+        setDoc(doc(db, 'users', user.email), { career: selected }, { merge: true }).catch(() => {});
+      }
       Alert.alert('Carrera Actualizada', `Tu carrera se ha configurado como: ${selected}`);
     } catch (e) {
       console.warn('Error guardando carrera:', e);
